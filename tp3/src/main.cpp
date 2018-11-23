@@ -18,12 +18,18 @@ uint8_t radioBuf[(T2_MESSAGE_HEADERS_LEN + T2_MESSAGE_MAX_DATA_LEN)];
 // T2 Message
 T2Message myMsg;
 
-uint8_t mySerialNumber = 0x09;
+uint8_t mySerialNumber = 0x02;
 uint8_t len;
 uint8_t myID;
+uint8_t idNode;
+uint8_t idNetwork;
+uint8_t idSerialNumber;
+uint8_t idChannel;
+uint8_t idField;
 
 int sendLORA(int idx, int src, int dst, int sdx, int cmd, const char *data, int len) {
   uint8_t radioBufLen = 0;
+
 
   myMsg.idx = idx;
   myMsg.src = src;
@@ -49,15 +55,87 @@ int sendLORA(int idx, int src, int dst, int sdx, int cmd, const char *data, int 
   return 1;
 }
 
-int sendGiveMeANodeID() {
-  char buf[10];
+int sendGiveMeANodeID(int idx, int src, int dst, int sdx, int cmd) {
+  char buf[250];
   int len;
+  
+  if (idx == 0x00) {
+    itoa(mySerialNumber,buf,10);
+    len = strlen(buf);
+    buf[len] = ';';
+    len = len + 1;
+  } else {
+    len = 0x00;
+  }
+  return sendLORA(idx, src, dst, sdx, cmd, buf, len);
+}
 
-  itoa(mySerialNumber,buf,10);
-  len = strlen(buf);
-  buf[len] = ';';
-  len = len + 1;
-  return sendLORA(0x00, myID, 0x01, 0x01, 0x00, buf, len);
+int* parseString (char *s) {
+  char* myArray[strlen(s)];
+  int myArrayint[strlen(s)];
+  int i = 0;
+  char *p = strtok(s, ";");
+  while((p != NULL) & (i < 9)) {
+    myArray[i++] = p;
+    p = strtok(NULL, ";");
+  }
+
+  while (i < 10) myArray[i++] = NULL;
+
+  for (i = 0; i < 10; ++i) {
+    if (myArray[i] != NULL) {
+      myArrayint[i] = atoi(myArray[i]);
+    }
+  }
+  
+  return myArrayint;
+}
+
+int send_message(int idx, int src, int dst, int sdx, int cmd, char* mess) {
+  int len;
+  len = sizeof(mess);
+  return sendLORA(idx, src, dst, sdx, cmd, mess, len);
+}
+void listen_reception() {
+  int i=0 ;
+  int packetReceiv = 0;
+  char message[20];
+  int bufLen = 0;
+  int packetSize = LoRa.parsePacket();
+  if (packetSize) {
+    while (LoRa.available() && bufLen <= 250) {
+      message[i++] = (char) LoRa.read();
+    }
+    packetReceiv = 1;
+    bufLen = i ;
+  }
+  if(packetReceiv) {
+      Serial.println("Response received");
+      LoRa.packetRssi();
+      myMsg.setSerializedMessage((uint8_t *) message, bufLen);
+
+      if (idNode == NULL) {
+        // Récupération du node et network ID
+        idNode = atoi(strtok((char*)myMsg.data, ";"));
+        idNetwork = atoi(strtok(NULL, ";"));
+        idSerialNumber = atoi(strtok(NULL, ";"));
+
+        if (myMsg.idx == 0x00 && myMsg.src == 0x01 && myMsg.dst == 0x00 && myMsg.sdx == 0x01 && myMsg.cmd == 0x01 && idSerialNumber == mySerialNumber) {
+          myMsg.printMessage();
+          sendGiveMeANodeID(idNetwork, idNode, 0x01, 0x02, 0x00);
+        }
+      }
+
+      // Vérification initialisation du canal de données
+      if (myMsg.idx == idNetwork && myMsg.src == 0x01 && myMsg.sdx == 0x02 && myMsg.cmd == 0x01 && myMsg.dst == idNode) {
+        myMsg.printMessage();
+        idChannel = atoi(strtok((char*)myMsg.data, ";"));
+        Serial.println(idChannel);
+        idField = atoi(strtok(NULL, ";"));
+        send_message(idNetwork, idNode, 0x01, 0x03, 0x01, "23;");
+      }
+      
+  }
 }
 
 void setup() {
@@ -67,32 +145,11 @@ void setup() {
     Serial.println("Starting LoRa failed!");
     while (1);
   }
-  myMsg.cmd = 0x00;
-  myMsg.idx = 0x00;
-  myMsg.src = 0x00;
-  myMsg.dst = 0x01;
-  myMsg.sdx = 0x01;
-  myMsg.data[0] = 403;
-  myMsg.len = 1;
-
   uint8_t radioBufLen = 0;
-
-  int res;
-  res = sendGiveMeANodeID();
+  sendGiveMeANodeID(0x00, myID, 0x01, 0x01, 0x00);
   Serial.println("ID sent");
 }
 
 void loop() {
-  int packetSize = LoRa.parsePacket();
-  if (packetSize) {
-    uint8_t i;
-  	i=0;
-    uint8_t* message;
-	  while (LoRa.available()) {
-      message[i++] = (char) LoRa.read();
-      Serial.println(message[i]);
-      /*myMsg.setSerializedMessage(message, len);
-      myMsg.printMessage();*/
-	  }
-  }
+  listen_reception();
 }
